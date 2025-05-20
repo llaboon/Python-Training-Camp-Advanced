@@ -1,7 +1,7 @@
 colorama==0.4.6
 exceptiongroup==1.2.2
 iniconfig==2.1.0
-numpy==2.2.4
+numpy
 opencv-python==4.11.0.86
 packaging==24.2
 pandas==2.2.3
