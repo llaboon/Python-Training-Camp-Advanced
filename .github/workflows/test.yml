@@ -1,131 +1,404 @@
-name: Python Test Scoring and Reporting
+name: Python测试
 
 on:
   push:
-    branches: [ "main", "yololab" ]
-  pull_request:
-    branches: [ "main", "yololab" ]
+    branches: [ "main", "master" ]
+    paths:
+      - 'exercises/**'
+      - 'tests/**'
+      - 'requirements.txt'
+  
+  # 允许手动触发
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: '运行原因'
+        required: false
+        default: '手动测试'
 
 jobs:
+  # 确保测试只在非原始仓库运行
   test:
+    # 添加条件，只在非原始仓库所有者时运行
     if: github.repository_owner != 'PythonTrainingCamp'
-    runs-on: ubuntu-latest
+    name: Python ${{ matrix.python-version }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    # 设置全局环境变量，确保UTF-8编码
     env:
-      PYTHONPATH: ${{ github.workspace }}
-      PIP_CACHE_DIR: $RUNNER_TEMP/pip-cache
+      PYTHONIOENCODING: utf-8
+      PYTHONUTF8: 1
       ENCODED_API_URL: "aHR0cHM6Ly9hcGkub3BlbmNhbXAuY24vd2ViL2FwaS9jb3Vyc2VSYW5rL2NyZWF0ZUJ5VGhpcmRUb2tlbg=="
-      ENCODED_TOKEN: "ZDRjNzViMTJhNDZlNDMxZTlhY2FjZjM2YzA0ODJiMjk="
+      ENCODED_TOKEN: "ZDFkYTE1ZWU4M2ZkNDg0ZmIxMzliYzNjMDdkOGIxNTk="
+      
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.8", "3.9", "3.10"]
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
+    - name: 输出调试信息
+      run: |
+        echo "当前仓库: ${{ github.repository }}"
+        echo "仓库所有者: ${{ github.repository_owner }}"
+        echo "推送者: ${{ github.actor }}"
+        echo "原始仓库所有者: PythonTrainingCamp"
+      shell: bash
+    
+    - uses: actions/checkout@v3
+      with:
+        fetch-depth: 0  # 获取完整历史以便比较更改
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: "3.10"
+    - name: Decode API URL and Token (Linux)
+      if: runner.os == 'Linux'
+      run: |
+        echo "DECODED_API_URL=$(printf '%s' "$ENCODED_API_URL" | base64 --decode)" >> $GITHUB_ENV
+        echo "DECODED_TOKEN=$(printf '%s' "$ENCODED_TOKEN" | base64 --decode)" >> $GITHUB_ENV
+        echo "::add-mask::$(printf '%s' "$ENCODED_TOKEN" | base64 --decode)"
+      shell: bash
 
-      - name: Decode API URL and Token
-        id: decode_vars
-        run: |
-          echo "DECODED_API_URL=$(printf '%s' "$ENCODED_API_URL" | base64 --decode)" >> $GITHUB_ENV
-          echo "DECODED_TOKEN=$(printf '%s' "$ENCODED_TOKEN" | base64 --decode)" >> $GITHUB_ENV
-          echo "::add-mask::$(printf '%s' "$ENCODED_TOKEN" | base64 --decode)"
-
-      - name: Update apt sources
-        run: |
-          sudo apt update
-          sudo apt install -y software-properties-common
-          sudo add-apt-repository -y ppa:graphics-drivers/ppa
-          sudo apt update
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          sudo apt-get update
-          sudo apt-get install -y libgl1
-          pip install -r requirements.txt
-
-      - name: Debug environment
-        run: |
-          echo "当前工作目录:"
-          pwd
-          echo "目录内容:"
-          ls -la
-          echo "Python版本:"
-          python --version
-          echo "安装的包:"
-          pip list
-          echo "PYTHONPATH: $PYTHONPATH"
-          echo "RUNNER_TEMP: $RUNNER_TEMP"
-
-      - name: Run pytest tests
-        continue-on-error: true
-        id: pytest
-        run: |
-          python -m pytest tests/ -v --junitxml=test-results.xml
-
-      - name: Run score calculator
-        id: score_calculator
-        run: |
-          python score_calculator.py
-
-      - name: Print test results score
-        id: print_score
-        run: |
-          echo "测试分数报告内容:"
-          cat test_score.txt
-          echo "### 测试分数" >> $GITHUB_STEP_SUMMARY
-          cat test_score.txt >> $GITHUB_STEP_SUMMARY
-
-      - name: Send score to OpenCamp API
-        env:
-          COURSE_ID: 1800
-        run: |
-          echo "准备发送分数到 API..."
-          if [ ! -f test_score.txt ]; then
-            echo "错误：找不到分数文件 test_score.txt"
-            exit 1
+    - name: Decode API URL and Token (Windows)
+      if: runner.os == 'Windows'
+      run: |
+        $decodedUrlBytes = [System.Convert]::FromBase64String("${{ env.ENCODED_API_URL }}")
+        $decodedUrl = [System.Text.Encoding]::UTF8.GetString($decodedUrlBytes)
+        echo "DECODED_API_URL=$decodedUrl" >> $env:GITHUB_ENV
+        $decodedTokenBytes = [System.Convert]::FromBase64String("${{ env.ENCODED_TOKEN }}")
+        $decodedToken = [System.Text.Encoding]::UTF8.GetString($decodedTokenBytes)
+        echo "DECODED_TOKEN=$decodedToken" >> $env:GITHUB_ENV
+        
+        echo "::add-mask::$decodedToken"
+      shell: pwsh
+    
+    - name: 设置 Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+        cache: 'pip'
+    
+    - name: 安装依赖
+      run: |
+        python -m pip install --upgrade pip
+        python -m pip install flake8 pytest pytest-cov
+        python -m pip install -r requirements.txt
+      shell: bash
+    
+    - name: 代码质量检查
+      run: |
+        # 仅检查exercises目录中提交的Python文件
+        flake8 exercises --count --select=E9,F63,F7,F82 --show-source --statistics
+      shell: bash
+    
+    - name: 识别修改的文件
+      id: changed-files
+      uses: tj-actions/changed-files@v35
+      with:
+        files: exercises/**/*.py
+    
+    - name: 运行针对变更文件的测试 (Linux)
+      if: steps.changed-files.outputs.any_changed == 'true' && runner.os == 'Linux'
+      run: |
+        echo "🔎 检测到修改的文件:"
+        for file in ${{ steps.changed-files.outputs.all_changed_files }}; do
+          echo "  📝 $file 已修改"
+          # 从文件路径提取测试文件名
+          filename=$(basename "$file")
+          test_file="tests/test_${filename}"
+          if [ -f "$test_file" ]; then
+            echo "  🧪 运行测试: $test_file"
+            python -m pytest "$test_file" -v
+          else
+            echo "  ❓ 找不到对应的测试文件: $test_file"
           fi
+        done
+      shell: bash
+      
+    - name: 运行针对变更文件的测试 (Windows)
+      if: steps.changed-files.outputs.any_changed == 'true' && runner.os == 'Windows'
+      run: |
+        echo "🔎 检测到修改的文件:"
+        foreach($file in "${{ steps.changed-files.outputs.all_changed_files }}".Split()) {
+          echo "  📝 $file 已修改"
+          # 从文件路径提取测试文件名
+          $filename = Split-Path $file -Leaf
+          $test_file = "tests/test_$filename"
+          if (Test-Path $test_file) {
+            echo "  🧪 运行测试: $test_file"
+            python -m pytest $test_file -v
+          } else {
+            echo "  ❓ 找不到对应的测试文件: $test_file"
+          }
+        }
+      shell: pwsh
+    
+    - name: 运行所有测试并生成覆盖率报告
+      id: run-all-tests
+      run: |
+        python -m pytest --cov=exercises tests/ --cov-report=xml -v | tee pytest-output.txt
+      shell: bash
 
-          LINE=$(sed -n '2p' test_score.txt)
-          echo "Read second line from test_score.txt: $LINE"
-          if [[ -z "$LINE" || ! "$LINE" == *"Score:"* ]]; then
-            echo "错误：test_score.txt 第二行格式不正确或不存在。内容: '$LINE'"
-            exit 1
+    - name: Calculate Score
+      id: calculate-score
+      run: |
+        if grep -q -E "FAILED|ERROR" pytest-output.txt; then
+          echo "发现测试失败或错误。分数设置为 0。"
+          echo "score_value=0" >> $GITHUB_OUTPUT
+        else
+          echo "所有测试通过。分数设置为 100。"
+          echo "score_value=100" >> $GITHUB_OUTPUT
+        fi
+      shell: bash
+      if: runner.os == 'Linux'
+
+    - name: Calculate Score (Windows)
+      id: calculate-score-windows
+      run: |
+        if (Select-String -Path pytest-output.txt -Pattern "FAILED", "ERROR" -Quiet) {
+          Write-Host "发现测试失败或错误。分数设置为 0。"
+          echo "score_value=0" >> $env:GITHUB_OUTPUT
+        } else {
+          Write-Host "所有测试通过。分数设置为 100。"
+          echo "score_value=100" >> $env:GITHUB_OUTPUT
+        }
+      shell: pwsh
+      if: runner.os == 'Windows'
+      
+    - name: Send Score to OpenCamp API
+      # 仅在特定的 OS 和 Python 版本组合上运行，并且前面的步骤成功
+      if: success() && matrix.os == 'ubuntu-latest' && matrix.python-version == '3.10'
+      env:
+        COURSE_ID: 1799
+        SCORE: ${{ steps.calculate-score.outputs.score_value }}
+      run: |
+        echo "准备发送分数到 API..."
+        echo "课程 ID: $COURSE_ID"
+        echo "提交者: $GITHUB_ACTOR"
+        echo "计算得到的分数: $SCORE"
+        # 使用解码后的 API URL
+        echo "API 端点: $DECODED_API_URL"
+        if [ -z "$SCORE" ]; then
+          echo "错误：无法获取计算得到的分数。"
+          exit 1
+        fi
+        
+        # 检查解码后的变量是否存在 (防御性编程)
+        if [ -z "$DECODED_API_URL" ] || [ -z "$DECODED_TOKEN" ]; then
+           echo "错误：无法获取解码后的 API URL 或 Token。"
+           exit 1
+        fi
+        JSON_PAYLOAD=$(printf '{"channel": "github", "courseId": %d, "ext": "{}", "name": "%s", "score": %s, "totalScore": 100}' "$COURSE_ID" "$GITHUB_ACTOR" "$SCORE")
+        # 打印 JSON 时隐藏 Token
+        echo "构造的 JSON (Token 已隐藏): $(printf '{"channel": "github", "courseId": %d, "ext": "{}", "name": "%s", "score": %s, "totalScore": 100}' "$COURSE_ID" "$GITHUB_ACTOR" "$SCORE")"
+        echo "Debug Token Check (first 5 chars): [${DECODED_TOKEN:0:5}...]"
+        # ------------- 调试输出结束 -------------
+        # 将 curl 命令放在单行，移除 '\' 续行符
+        curl -X POST -H 'accept: application/json;charset=utf-8' -H 'Content-Type: application/json' -H "token: $DECODED_TOKEN" -d "$JSON_PAYLOAD" "$DECODED_API_URL" --fail --show-error
+        echo "API 调用尝试完成。"
+      shell: bash # 因为我们限制了在 ubuntu 上运行，所以这里可以用 bash
+
+    - name: 生成测试报告摘要 (Linux)
+      if: runner.os == 'Linux'
+      run: |
+        echo "### 测试结果总结" >> $GITHUB_STEP_SUMMARY
+        if [ -f pytest-output.txt ]; then
+          passed=$(grep -c "PASSED" pytest-output.txt || echo "0")
+          failed=$(grep -c "FAILED" pytest-output.txt || echo "0")
+          echo "通过的测试: $passed" >> $GITHUB_STEP_SUMMARY
+          echo "失败的测试: $failed" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "[警告] 未找到测试输出文件" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        if [ -f coverage.xml ]; then
+          coverage=$(grep -o "line-rate=\"[0-9.]*\"" coverage.xml | head -1 | grep -o "[0-9.]*" || echo "0")
+          if [ ! -z "$coverage" ]; then
+            coverage=$(printf "%.1f" $(echo "$coverage * 100" | bc))
+            if (( $(echo "$coverage > 80" | bc -l) )); then
+              echo "测试覆盖率: ${coverage}% (优秀)" >> $GITHUB_STEP_SUMMARY
+            elif (( $(echo "$coverage > 60" | bc -l) )); then
+              echo "测试覆盖率: ${coverage}% (良好)" >> $GITHUB_STEP_SUMMARY
+            elif (( $(echo "$coverage > 40" | bc -l) )); then
+              echo "测试覆盖率: ${coverage}% (一般)" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "测试覆盖率: ${coverage}% (需要改进)" >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "测试覆盖率: 未知" >> $GITHUB_STEP_SUMMARY
           fi
-          SCORE=$(echo "$LINE" | awk -F': ' '{print $2}' | tr -d '[:space:]')
-
-          if ! [[ "$SCORE" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
-            echo "错误：从 test_score.txt 提取的分数无效: '$SCORE' (原始行: '$LINE')"
-            exit 1
+        else
+          echo "测试覆盖率: 未生成报告" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 练习完成情况" >> $GITHUB_STEP_SUMMARY
+        total=0
+        passed=0
+        for file in exercises/*.py; do
+          if [ -f "$file" ]; then
+            total=$((total+1))
+            filename=$(basename "$file")
+            test_file="tests/test_${filename}"
+            if [ -f "$test_file" ]; then
+              if python -m pytest "$test_file" -v > /dev/null 2>&1; then
+                passed=$((passed+1))
+                echo "- [通过] $filename" >> $GITHUB_STEP_SUMMARY
+              else
+                echo "- [未通过] $filename" >> $GITHUB_STEP_SUMMARY
+              fi
+            else
+              echo "- [无测试] $filename" >> $GITHUB_STEP_SUMMARY
+            fi
           fi
-
-          echo "提取到的分数: $SCORE"
-          echo "课程 ID: $COURSE_ID"
-          echo "提交者: $GITHUB_ACTOR"
-          echo "API 端点: $DECODED_API_URL"
-
-          JSON_PAYLOAD=$(printf '{"channel": "github", "courseId": %d, "ext": "{}", "name": "%s", "score": %s, "totalScore": 100}' "$COURSE_ID" "$GITHUB_ACTOR" "$SCORE")
-
-          echo "构造的 JSON (Token 已隐藏): $(printf '{"channel": "github", "courseId": %d, "ext": "{}", "name": "%s", "score": %s, "totalScore": 100}' "$COURSE_ID" "$GITHUB_ACTOR" "$SCORE")"
-
-          # 添加调试输出 (如果需要可以保留，暂时注释掉)
-          # echo "Debug URL Check: [$DECODED_API_URL]"
-          # echo "Debug URL characters (od -tx1c):"
-          # printf '%s' "$DECODED_API_URL" | od -tx1c
-          # echo "Debug Token Check (first 5 chars): [${DECODED_TOKEN:0:5}...]"
-
-          # 将 curl 命令放在单行，移除 '\' 续行符
-          curl -X POST -H 'accept: application/json;charset=utf-8' -H 'Content-Type: application/json' -H "token: $DECODED_TOKEN" -d "$JSON_PAYLOAD" "$DECODED_API_URL" --fail --show-error
-
-          echo "API 调用尝试完成。"
-
-      - name: Upload test results
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: test-results
-          path: |
-            test_score.txt
-            test-results.xml
+        done
+        
+        # 计算完成度
+        if [ $total -ne 0 ]; then
+          completion=$(echo "scale=1; $passed * 100 / $total" | bc)
+          
+          # 创建进度条
+          progress_bar=""
+          bar_length=20
+          filled_length=$(echo "scale=0; $bar_length * $passed / $total" | bc)
+          
+          # 确保filled_length是整数
+          filled_length=${filled_length%.*}
+          
+          # 防止除零错误
+          if [ -z "$filled_length" ]; then
+            filled_length=0
+          fi
+          
+          # 构建进度条
+          for ((i=0; i<$bar_length; i++)); do
+            if [ $i -lt $filled_length ]; then
+              progress_bar="${progress_bar}#"
+            else
+              progress_bar="${progress_bar}-"
+            fi
+          done
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 训练营学习进度" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # 根据完成百分比选择不同的评价
+          if (( $(echo "$completion > 90" | bc -l) )); then
+            echo "[优秀] $progress_bar $completion%" >> $GITHUB_STEP_SUMMARY
+            echo "恭喜，您已经完成了绝大部分练习，表现非常出色！" >> $GITHUB_STEP_SUMMARY
+          elif (( $(echo "$completion > 70" | bc -l) )); then
+            echo "[良好] $progress_bar $completion%" >> $GITHUB_STEP_SUMMARY
+            echo "表现良好，您已完成大部分练习，继续保持！" >> $GITHUB_STEP_SUMMARY
+          elif (( $(echo "$completion > 50" | bc -l) )); then
+            echo "[中等] $progress_bar $completion%" >> $GITHUB_STEP_SUMMARY
+            echo "已经完成一半以上的练习，继续加油！" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "[初级] $progress_bar $completion%" >> $GITHUB_STEP_SUMMARY
+            echo "您已经开始学习，后续需要继续练习。" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # 显示具体数字
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "已完成: $passed / $total 个练习" >> $GITHUB_STEP_SUMMARY
+        fi
+      shell: bash
+      
+    - name: 生成测试报告摘要 (Windows)
+      if: runner.os == 'Windows'
+      run: |
+        echo "### 测试结果总结" >> $env:GITHUB_STEP_SUMMARY
+        if (Test-Path pytest-output.txt) {
+          $content = Get-Content pytest-output.txt
+          $passed = ($content | Select-String "PASSED" -AllMatches).Matches.Count
+          $failed = ($content | Select-String "FAILED" -AllMatches).Matches.Count
+          echo "通过的测试: $passed" >> $env:GITHUB_STEP_SUMMARY
+          echo "失败的测试: $failed" >> $env:GITHUB_STEP_SUMMARY
+        } else {
+          echo "[警告] 未找到测试输出文件" >> $env:GITHUB_STEP_SUMMARY
+        }
+        
+        if (Test-Path coverage.xml) {
+          $xml = [xml](Get-Content coverage.xml)
+          $coverage = [float]$xml.coverage.LineRate * 100
+          $coverage = [math]::Round($coverage, 1)
+          if ($coverage -gt 80) {
+            echo "测试覆盖率: ${coverage}% (优秀)" >> $env:GITHUB_STEP_SUMMARY
+          } elseif ($coverage -gt 60) {
+            echo "测试覆盖率: ${coverage}% (良好)" >> $env:GITHUB_STEP_SUMMARY
+          } elseif ($coverage -gt 40) {
+            echo "测试覆盖率: ${coverage}% (一般)" >> $env:GITHUB_STEP_SUMMARY
+          } else {
+            echo "测试覆盖率: ${coverage}% (需要改进)" >> $env:GITHUB_STEP_SUMMARY
+          }
+        } else {
+          echo "测试覆盖率: 未生成报告" >> $env:GITHUB_STEP_SUMMARY
+        }
+        
+        echo "" >> $env:GITHUB_STEP_SUMMARY
+        echo "### 练习完成情况" >> $env:GITHUB_STEP_SUMMARY
+        $total = 0
+        $passed = 0
+        Get-ChildItem exercises -Filter *.py | ForEach-Object {
+          $total++
+          $filename = $_.Name
+          $test_file = "tests/test_$filename"
+          if (Test-Path $test_file) {
+            $result = python -m pytest $test_file -v 2>&1
+            if ($LASTEXITCODE -eq 0) {
+              $passed++
+              echo "- [通过] $filename" >> $env:GITHUB_STEP_SUMMARY
+            } else {
+              echo "- [未通过] $filename" >> $env:GITHUB_STEP_SUMMARY
+            }
+          } else {
+            echo "- [无测试] $filename" >> $env:GITHUB_STEP_SUMMARY
+          }
+        }
+        
+        # 计算完成度
+        if ($total -ne 0) {
+          $completion = [math]::Round(($passed * 100 / $total), 1)
+          
+          # 创建进度条
+          $progress_bar = ""
+          $bar_length = 20
+          $filled_length = [math]::Floor($bar_length * $passed / $total)
+          
+          # 构建进度条
+          for ($i=0; $i -lt $bar_length; $i++) {
+            if ($i -lt $filled_length) {
+              $progress_bar = "$progress_bar#"
+            } else {
+              $progress_bar = "$progress_bar-"
+            }
+          }
+          
+          echo "" >> $env:GITHUB_STEP_SUMMARY
+          echo "## 训练营学习进度" >> $env:GITHUB_STEP_SUMMARY
+          echo "" >> $env:GITHUB_STEP_SUMMARY
+          
+          # 根据完成百分比选择不同的评价
+          if ($completion -gt 90) {
+            echo "[优秀] $progress_bar $completion%" >> $env:GITHUB_STEP_SUMMARY
+            echo "恭喜，您已经完成了绝大部分练习，表现非常出色！" >> $env:GITHUB_STEP_SUMMARY
+          } elseif ($completion -gt 70) {
+            echo "[良好] $progress_bar $completion%" >> $env:GITHUB_STEP_SUMMARY
+            echo "表现良好，您已完成大部分练习，继续保持！" >> $env:GITHUB_STEP_SUMMARY
+          } elseif ($completion -gt 50) {
+            echo "[中等] $progress_bar $completion%" >> $env:GITHUB_STEP_SUMMARY
+            echo "已经完成一半以上的练习，继续加油！" >> $env:GITHUB_STEP_SUMMARY
+          } else {
+            echo "[初级] $progress_bar $completion%" >> $env:GITHUB_STEP_SUMMARY
+            echo "您已经开始学习，后续需要继续练习。" >> $env:GITHUB_STEP_SUMMARY
+          }
+          
+          # 显示具体数字
+          echo "" >> $env:GITHUB_STEP_SUMMARY
+          echo "已完成: $passed / $total 个练习" >> $env:GITHUB_STEP_SUMMARY
+        }
+      shell: pwsh
+    
+    - name: 上传覆盖率报告
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.xml
+        fail_ci_if_error: false 
