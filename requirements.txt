@@ -4,7 +4,7 @@ iniconfig==2.1.0
 numpy
 opencv-python==4.11.0.86
 packaging==24.2
-pandas==2.2.3
+pandas
 pluggy==1.5.0
 pytest==8.3.5
 python-dateutil==2.9.0.post0
